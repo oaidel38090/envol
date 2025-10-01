@@ -1,0 +1,500 @@
+version: "3"
+
+services:
+
+################################################################
+# Configuration du Notebook Jupyter pour les TP en Python      #
+################################################################
+
+  jupyterlab:
+      image: jupyter/minimal-notebook
+      restart: always
+      container_name: 'jupyterlab'
+      environment:
+        JUPYTER_ENABLE_LAB: "yes"
+      command: >
+        sh -c "pip install jupyterlab_myst &&
+              pip install pymongo &&
+              start-notebook.sh --NotebookApp.token='' --NotebookApp.password=''"
+      volumes:
+        - ..:/home/jovyan
+      ports:
+        - "8888:8888"
+      networks:
+        - bigdata
+
+#######################################
+# Configuration du cluster OpenSearch #
+#######################################
+
+  opensearch-node1: # This is also the hostname of the container within the Docker network (i.e. https://opensearch-node1/)
+    image: opensearchproject/opensearch:latest # Specifying the latest available image - modify if you want a specific version
+    container_name: opensearch-node1
+    hostname: opensearch-node1
+    shm_size: '1g'
+    environment:
+      - cluster.name=opensearch-cluster
+      - bootstrap.memory_lock=true # Disable JVM heap memory swapping
+      - node.name=opensearch-node1 # Name the node that will run in this container
+      - discovery.seed_hosts=opensearch-node1,opensearch-node2 # Nodes to look for when discovering the cluster
+      - cluster.initial_cluster_manager_nodes=opensearch-node1,opensearch-node2 # Nodes eligible to serve as cluster manager
+      - "OPENSEARCH_JAVA_OPTS=-Xms512m -Xmx512m" # Set min and max JVM heap sizes to at least 50% of system RAM
+    ulimits:
+      memlock:
+        soft: -1 # Set memlock to unlimited (no soft or hard limit)
+        hard: -1
+      nofile:
+        soft: 65536 # Maximum number of open files for the opensearch user - set to at least 65536
+        hard: 65536
+    volumes:
+      - opensearch-data1:/usr/share/opensearch/data # Creates volume called opensearch-data1 and mounts it to the container
+    ports:
+      - 9200:9200 # REST API
+      - 9600:9600 # Performance Analyzer
+    networks:
+      - bigdata # All of the containers will join the same Docker bridge network
+
+  opensearch-node2:
+    image: opensearchproject/opensearch:latest # This should be the same image used for opensearch-node1 to avoid issues
+    container_name: opensearch-node2
+    hostname: opensearch-node2
+    shm_size: '1g'
+    environment:
+      - cluster.name=opensearch-cluster
+      - node.name=opensearch-node2
+      - discovery.seed_hosts=opensearch-node1,opensearch-node2
+      - cluster.initial_cluster_manager_nodes=opensearch-node1,opensearch-node2
+      - bootstrap.memory_lock=true
+      - "OPENSEARCH_JAVA_OPTS=-Xms512m -Xmx512m"
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+    volumes:
+      - opensearch-data2:/usr/share/opensearch/data
+    ports:
+      - 9201:9200 # REST API
+      - 9601:9600 # Performance Analyzer
+    networks:
+      - bigdata
+
+  opensearch-node3:
+    image: opensearchproject/opensearch:latest # This should be the same image used for opensearch-node1 to avoid issues
+    container_name: opensearch-node3
+    hostname: opensearch-node3
+    shm_size: '1g'
+    environment:
+      - cluster.name=opensearch-cluster
+      - bootstrap.memory_lock=true # Disable JVM heap memory swapping
+      - node.name=opensearch-node3
+      - discovery.seed_hosts=opensearch-node1,opensearch-node2
+      - "OPENSEARCH_JAVA_OPTS=-Xms512m -Xmx512m"
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+    volumes:
+      - opensearch-data3:/usr/share/opensearch/data
+    ports:
+      - 9202:9200 # REST API
+      - 9602:9600 # Performance Analyzer
+    networks:
+      - bigdata
+
+  opensearch-dashboards:
+    image: opensearchproject/opensearch-dashboards:latest # Make sure the version of opensearch-dashboards matches the version of opensearch installed on other nodes
+    container_name: opensearch-dashboards
+    hostname: opensearch-dashboards
+    ports:
+      - 5601:5601 # Map host port 5601 to container port 5601
+    expose:
+      - "5601" # Expose port 5601 for web access to OpenSearch Dashboards
+    environment:
+      OPENSEARCH_HOSTS: '["https://opensearch-node1:9200","https://opensearch-node2:9200"]' # Define the OpenSearch nodes that OpenSearch Dashboards will query
+    networks:
+      - bigdata
+
+######################################################
+# Génerateur de log apache pour Opensearch           #
+######################################################
+
+  fluentbit-forward-sharding:
+    container_name: fluentbit-forward-sharding
+    hostname: fluentbit-forward-sharding
+    image: cr.fluentbit.io/fluent/fluent-bit
+    ports:
+      - '24230:24224'
+    volumes:
+      - ./fluentbit/fluent-bit-forward-sharding.conf:/fluent-bit/etc/fluent-bit.conf
+      - ./fluentbit/parser.conf:/fluent-bit/etc/parser.conf
+      - ./fluentbit/root-ca.pem:/fluent-bit/etc/root-ca.pem
+    networks:
+      -  bigdata
+
+
+  flog-sharding:
+    container_name: flog-sharding
+    image: mingrammer/flog
+    platform: linux/amd64
+    links:
+      - fluentbit-forward-sharding
+    command: '-t stdout -d 1s -n 100 -f apache_combined'
+    logging:
+      driver: fluentd
+      options:
+        fluentd-address: localhost:24230
+        tag: apache
+    networks:
+      - bigdata
+
+#######################################
+# Configuration du cluster MongoDB    #
+#######################################
+
+  mongo1:
+    container_name: mongo1
+    hostname: mongo1
+    image: mongo:4.4.6
+    ports:
+      - 30001:27017
+    command: mongod --replSet my-mongo-set
+    volumes:
+      - mongo1-data:/data/db
+    networks:
+      - bigdata
+
+  mongo2:
+    container_name: mongo2
+    hostname: mongo2
+    image: mongo:4.4.6
+    ports:
+      - 30002:27017
+    command: mongod --replSet my-mongo-set
+    volumes:
+      - mongo2-data:/data/db
+    networks:
+      - bigdata
+
+  mongo3:
+    container_name: mongo3
+    hostname: mongo3
+    image: mongo:4.4.6
+    ports:
+      - 30003:27017
+    command: mongod --replSet my-mongo-set
+    volumes:
+      - mongo3-data:/data/db
+    networks:
+      - bigdata
+
+# finally, we can define the initialization server
+# this runs the `rs.initiate` command to intialize
+# the replica set and connect the three servers to each other
+  mongoinit:
+    image: mongo:4.4.6
+    # this container will exit after executing the command
+    restart: "no"
+    depends_on:
+      - mongo1
+      - mongo2
+      - mongo3
+    networks:
+      - bigdata
+    command: >
+      mongo --host mongo1:27017 --eval
+      '
+      config = {
+      "_id" : "my-mongo-set",
+      "members" : [
+        {
+          "_id" : 0,
+          "host" : "mongo1:27017"
+        },
+        {
+          "_id" : 1,
+          "host" : "mongo2:27017"
+        },
+        {
+          "_id" : 2,
+          "host" : "mongo3:27017"
+        }
+      ]
+      };
+      rs.initiate(config);
+      '
+
+  loaddatamoviesintomongosingle:
+    image: mongo:4.4.6
+    # this container will exit after executing the command
+    restart: "no"
+    depends_on:
+      - mongosingle
+    volumes:
+      - ./mongodb:/dataimport
+    networks:
+      - bigdata
+    command: >
+      mongoimport --uri 'mongodb://mongosingle:27017' --drop -d training -c movies --jsonArray /dataimport/movies.json 
+
+
+  loaddatazipsintomongosingle:
+    image: mongo:4.4.6
+    # this container will exit after executing the command
+    restart: "no"
+    depends_on:
+      - mongosingle
+    volumes:
+      - ./mongodb:/dataimport
+    networks:
+      - bigdata
+    command: >
+      mongoimport --db training --collection "zips" --drop --type json --host "mongosingle:27017"  --file "/dataimport/zips.json"
+
+  loaddatacompaniesintomongosingle:
+    image: mongo:4.4.6
+    # this container will exit after executing the command
+    restart: "no"
+    depends_on:
+      - mongosingle
+    volumes:
+      - ./mongodb:/dataimport
+    networks:
+      - bigdata
+    command: >
+      mongoimport --db training --collection "companies" --drop --type json --host "mongosingle:27017"  --file "/dataimport/companies.json"
+
+  loaddataroutesintomongosingle:
+    image: mongo:4.4.6
+    # this container will exit after executing the command
+    restart: "no"
+    depends_on:
+      - mongosingle
+    volumes:
+      - ./mongodb:/dataimport
+    networks:
+      - bigdata
+    command: >
+      mongoimport --db training --collection "routes" --drop --type json --host "mongosingle:27017"  --file "/dataimport/routes.json"
+
+  loaddatarestaurantintomongosingle:
+    image: mongo:4.4.6
+    # this container will exit after executing the command
+    restart: "no"
+    depends_on:
+      - mongosingle
+    volumes:
+      - ./mongodb:/dataimport
+    networks:
+      - bigdata
+    command: >
+      mongoimport --db training --collection "restaurant" --drop --type json --host "mongosingle:27017"  --file "/dataimport/restaurant.json"
+
+  loaddatatripsintomongosingle:
+    image: mongo:4.4.6
+    # this container will exit after executing the command
+    restart: "no"
+    depends_on:
+      - mongosingle
+    volumes:
+      - ./mongodb:/dataimport
+    networks:
+      - bigdata
+    command: >
+      mongoimport --db training --collection "trips" --drop --type json --host "mongosingle:27017"  --file "/dataimport/trips.json"
+
+  loaddatagradesintomongosingle:
+    image: mongo
+    # this container will exit after executing the command
+    restart: "no"
+    depends_on:
+      - mongosingle
+    volumes:
+      - ./mongodb:/dataimport
+    networks:
+      - bigdata
+    command: >
+      mongoimport --db training --collection "grades" --drop --type json --host "mongosingle:27017"  --file "/dataimport/grades.json"
+ 
+  mongodataimport:
+    image: mongo:4.4.6
+    # this container will exit after executing the command
+    restart: "no"
+    depends_on:
+      - mongo1
+      - mongo2
+      - mongo3
+    volumes:
+      - ./mongodb:/dataimport
+    networks:
+      - bigdata
+    command: >
+      mongoimport --uri 'mongodb://mongo1:27017,mongo2:27017,mongo3:27017/?replicaSet=my-mongo-set' -d training -c movies --jsonArray /dataimport/movies.json
+     # mongorestore --uri "mongodb://mongo1:27017,john.mongo2:27017,mongo3:27017/?replicaSet=my-mongo-set" -d training -c movies /dataimport
+
+  mongo:
+    image: mongo:4.4.6
+    hostname: mongo
+    container_name: 'mongo'
+    volumes:
+      - mongo-data:/data/db
+      - ./mongodb:/dataimport
+    ports:
+      - "27017:27017"
+    networks:
+      - bigdata
+
+  mongosingle:
+    image: mongo:4.4.6
+    hostname: mongosingle
+    container_name: mongosingle
+    volumes:
+      - ./mongodb:/dataimport
+    ports:
+      - "27017:27017"
+    networks:
+      - bigdata
+
+#######################################
+# Configuration du cluster Redis      #
+#######################################
+
+  redis-node-1:
+    image: redis:latest
+    hostname: redis-node-1
+    container_name: redis-node-1
+    ports:
+      - 7000:7000
+    networks:
+      - bigdata
+    volumes:
+      - ./redis/node1:/redis
+
+    command: redis-server /redis/redis.conf
+  redis-node-2:
+    image: redis:latest
+    hostname: redis-node-2
+    container_name: redis-node-2
+    ports:
+      - 7001:7000
+    networks:
+      - bigdata
+    volumes:
+      - ./redis/node2:/redis
+    command: redis-server /redis/redis.conf
+
+  redis-node-3:
+    image: redis:latest
+    hostname: redis-node-3
+    container_name: redis-node-3
+    ports:
+      - 7003:7000
+    networks:
+      - bigdata
+    volumes:
+      - ./redis/node3:/redis
+    command: redis-server /redis/redis.conf
+
+  redis-node-4:
+    image: redis:latest
+    hostname: redis-node-4
+    container_name: redis-node-4
+    ports:
+      - 7004:7000
+    networks:
+      - bigdata
+    volumes:
+      - ./redis/node4:/redis
+    command: redis-server /redis/redis.conf
+
+  redis-node-5:
+    image: redis:latest
+    hostname: redis-node-5
+    container_name: redis-node-5
+    ports:
+      - 7005:7000
+    networks:
+      - bigdata
+    volumes:
+      - ./redis/node5:/redis
+    command: redis-server /redis/redis.conf
+
+  redis-node-6:
+    image: redis:latest
+    hostname: redis-node-6
+    container_name: redis-node-6
+    ports:
+      - 7006:7000
+    networks:
+      - bigdata
+    volumes:
+      - ./redis/node6:/redis
+    command: redis-server /redis/redis.conf
+
+  redis-cluster-creator:
+    image: redis:latest
+    hostname: redis-cluster-creator
+    container_name: redis-cluster-creator
+    networks:
+      - bigdata
+    command: redis-cli -p 7000 --cluster create redis-node-1:7000 redis-node-2:7000 redis-node-3:7000 redis-node-4:7000 redis-node-5:7000 redis-node-6:7000 --cluster-replicas 1 --cluster-yes
+    depends_on:
+      - redis-node-1
+      - redis-node-2
+      - redis-node-3
+      - redis-node-4
+      - redis-node-5
+      - redis-node-6
+
+  redis:
+    image: redis
+    container_name: 'redis'
+    ports:
+      - "7010:7000"
+    networks:
+      - bigdata
+
+##########################################
+# Configuration de l'instance Neo4J      #
+##########################################
+
+  neo4j:
+    image: neo4j
+    container_name: 'neo4j'
+    volumes:
+      - neo4j-data:/data
+    ports:
+      - "7687:7687"
+      - "7474:7474"
+    networks:
+      - bigdata
+
+####################################
+# Déclaration du réseau bigdata    #
+####################################
+# L'ensemble des containers sera enregistré dans le réseau bigdata
+# la résolution de nom sera utilisé pour les communications entre containers
+
+networks:
+  bigdata:
+
+####################################
+# Déclaration des volumes bigdata    #
+####################################
+# Pour rendre persistant les données celles-ci seront conservé dans des volumes
+
+
+volumes:
+  opensearch-data3:
+  opensearch-data2:
+  opensearch-data1:
+  neo4j-data:
+  mongo3-data:
+  mongo2-data:
+  mongo1-data:
+  mongo-data:
