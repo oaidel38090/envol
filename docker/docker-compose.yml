@@ -24,19 +24,20 @@ services:
 # Configuration S3    #
 #######################################
 
-  localstack:
-    container_name: "${LOCALSTACK_DOCKER_NAME:-localstack-main}"
+  s3:
+    container_name: "s3"
     image: localstack/localstack
     ports:
-      - "127.0.0.1:4566:4566"            # LocalStack Gateway
-      - "127.0.0.1:4510-4559:4510-4559"  # external services port range
+      - "4566:4566"            # LocalStack Gateway
+      - "4510-4559:4510-4559"  # external services port range
     environment:
       # LocalStack configuration: https://docs.localstack.cloud/references/configuration/
       - DEBUG=${DEBUG:-0}
     volumes:
-      - "${LOCALSTACK_VOLUME_DIR:-./volume}:/var/lib/localstack"
+      - "s3data:/var/lib/localstack"
       - "/var/run/docker.sock:/var/run/docker.sock"
-
+    networks:
+      - bigdata
 
 
 
@@ -284,3 +285,4 @@ volumes:
   mongo2-data:
   mongo1-data:
   mongo-data:
+  s3data:
