@@ -138,7 +138,7 @@ NosqlBooster est un client graphique gratuit pour faciliter les opérations sur 
 
 https://www.nosqlbooster.com/downloads
 
-Télécharger le et installer le sur votre ordinateur.
+Télécharger et installer le sur votre ordinateur.
 
 
 
