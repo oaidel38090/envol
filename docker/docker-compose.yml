@@ -39,18 +39,9 @@ services:
     networks:
       - bigdata
 
-  s3:
-    container_name: "s3"
-    image: localstack/localstack
-    ports:
-      - "4566:4566"            # LocalStack Gateway
-      - "4510-4559:4510-4559"  # external services port range
-    environment:
-      # LocalStack configuration: https://docs.localstack.cloud/references/configuration/
-      - DEBUG=${DEBUG:-0}
-    volumes:
-      - "s3data:/var/lib/localstack"
-      - "/var/run/docker.sock:/var/run/docker.sock"
+  awscli:
+    container_name: "awscli"
+    image: amazon/aws-cli
     networks:
       - bigdata
 
